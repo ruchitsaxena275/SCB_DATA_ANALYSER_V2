@@ -1,100 +1,31 @@
 import streamlit as st
 import pandas as pd
-import numpy as np
-import matplotlib.pyplot as plt
-import plotly.express as px
-import io
+from ping3 import ping
 
-# -------- Constants --------
-MODULE_POWER_WP = 545.0
-MODULE_VOC = 49.91
-VMP_VOC_RATIO = 0.82
-NUM_STRINGS = 18
+# ------------------ DEVICE LIST ------------------
+devices = [
+    {"name": "PLC ITC-1", "ip": "10.22.250.1"},
+    {"name": "CENTRAL INVERTER-1 (ITC-1)", "ip": "10.22.250.2"},
+    {"name": "CENTRAL INVERTER-2 (ITC-1)", "ip": "10.22.250.3"},
+    {"name": "PROT RELAY 33KV ICOG PANEL (ITC-1)", "ip": "10.22.250.6"},
+    {"name": "MGW UPS (ITC-1)", "ip": "10.22.250.10"},
+    # ... continue with all 250 entries
+    {"name": "Magus-OPC Main #1", "ip": "10.22.250.250"},
+    {"name": "Magus-OPC Backup #2", "ip": "10.22.250.253"}
+]
 
-VMP = MODULE_VOC * VMP_VOC_RATIO
-I_MODULE_STC = MODULE_POWER_WP / VMP   # ≈ 13.3166 A
+# ------------------ STREAMLIT APP ------------------
+st.set_page_config(page_title="IP Ping Monitor", layout="wide")
 
-CR_LOW_THRESHOLD = 0.90
+st.title("🌐 IP Ping Monitor")
+st.write("Ping all devices in one click and see which are online/offline.")
 
-# -------- Functions --------
-def process_file(df):
-    # Assume: Col A = timestamp, Col B-S = strings, Col Y = irradiation
-    df = df.copy()
-    df.iloc[:,0] = pd.to_datetime(df.iloc[:,0])   # timestamp
-    df = df.set_index(df.columns[0])
+if st.button("🚀 Ping All Devices"):
+    results = []
+    for d in devices:
+        response = ping(d["ip"], timeout=1)
+        status = "✅ Online" if response else "❌ Offline"
+        results.append({"Device": d["name"], "IP": d["ip"], "Status": status})
 
-    measured_cols = df.columns[0:NUM_STRINGS]     # B..S
-    irr_col = df.columns[23]                      # Y
-
-    measured = df[measured_cols].astype(float)
-    irr = df[irr_col].astype(float)
-
-    expected_str_current = I_MODULE_STC * (irr / 1000.0)
-
-    result = measured.copy()
-    for i,col in enumerate(measured_cols, start=1):
-        result[f"Expected_String_{i}"] = expected_str_current
-        result[f"CR_String_{i}"] = np.where(expected_str_current>0,
-                                            result[col]/expected_str_current,
-                                            np.nan)
-
-    result["Expected_SCB_Current"] = expected_str_current * NUM_STRINGS
-    result["Measured_SCB_Current"] = measured.sum(axis=1)
-    result["Irradiance_Wm2"] = irr
-    return result
-
-def plot_heatmap(df):
-    cr_cols = [c for c in df.columns if c.startswith("CR_String_")]
-    cr_matrix = df[cr_cols]
-
-    fig, ax = plt.subplots(figsize=(14,6))
-    im = ax.imshow(cr_matrix.T, aspect='auto', origin='lower', vmin=0.0, vmax=1.4)
-    ax.set_yticks(np.arange(NUM_STRINGS))
-    ax.set_yticklabels([f"String {i+1}" for i in range(NUM_STRINGS)])
-    xticks = np.linspace(0, len(cr_matrix)-1, min(12, len(cr_matrix))).astype(int)
-    ax.set_xticks(xticks)
-    ax.set_xticklabels([df.index[i].strftime("%m-%d %H:%M") for i in xticks], rotation=45, ha='right')
-    ax.set_title("String Current Ratio Heatmap")
-    fig.colorbar(im, ax=ax, label="CR (Measured/Expected)")
-    st.pyplot(fig)
-
-def daily_summary(df):
-    cr_cols = [c for c in df.columns if c.startswith("CR_String_")]
-    df2 = df[cr_cols].copy()
-    df2["date"] = df.index.date
-    grouped = df2.groupby("date")
-
-    rows = []
-    for date, grp in grouped:
-        weak = []
-        for i,c in enumerate(cr_cols, start=1):
-            frac = (grp[c]<CR_LOW_THRESHOLD).mean()
-            if frac > 0.3:   # 30% of the time weak
-                weak.append(f"String {i}")
-        rows.append({"date": date, "weak_strings": ", ".join(weak)})
-    return pd.DataFrame(rows)
-
-# -------- Streamlit UI --------
-st.title("SCB String Current Analysis Tool")
-
-file = st.file_uploader("Upload Excel file (with fixed format)", type=["xlsx"])
-if file:
-    df = pd.read_excel(file, engine="openpyxl")
-    result = process_file(df)
-
-    st.subheader("Preview of Processed Data")
-    st.dataframe(result.head(20))
-
-    st.subheader("Heatmap of Current Ratio (CR)")
-    plot_heatmap(result)
-
-    st.subheader("Daily Summary of Weak Strings")
-    summary = daily_summary(result)
-    st.dataframe(summary)
-
-    # Download buttons
-    csv = result.reset_index().to_csv(index=False).encode("utf-8")
-    st.download_button("Download Processed CSV", csv, "processed_data.csv", "text/csv")
-
-    csv2 = summary.to_csv(index=False).encode("utf-8")
-    st.download_button("Download Daily Summary", csv2, "daily_summary.csv", "text/csv")
+    df = pd.DataFrame(results)
+    st.dataframe(df, use_container_width=True)
